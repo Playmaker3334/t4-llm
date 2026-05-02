@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm125m"
+version = "0.1.0"
+description = "Llama-style 125M decoder for unsupervised language modeling on Kaggle 2xT4"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1.0",
+    "numpy>=1.24.0",
+    "transformers>=4.40.0",
+    "datasets>=2.18.0",
+    "tokenizers>=0.15.0",
+    "tqdm>=4.66.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["llm125m*", "configs*"]
