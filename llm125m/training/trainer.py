@@ -2,7 +2,7 @@ import math
 import time
 import torch
 import torch.nn as nn
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 
 from llm125m.utils.diagnostics import TrainingDiagnostics
 from llm125m.utils.throughput import ThroughputMeter
@@ -27,7 +27,7 @@ class Trainer:
 
         unwrapped = self._unwrap()
         self.diag = TrainingDiagnostics(unwrapped, train_config, logger, enabled=self.is_main)
-        self.scaler = GradScaler(enabled=train_config.fp16, init_scale=train_config.grad_scaler_init)
+        self.scaler = GradScaler('cuda', enabled=train_config.fp16, init_scale=train_config.grad_scaler_init)
         self.throughput = ThroughputMeter(
             model_params=sum(p.numel() for p in unwrapped.parameters()),
             hidden_dim=model_config.hidden_dim,
@@ -58,7 +58,7 @@ class Trainer:
             tokens = tokens.to(self.device, non_blocking=True)
             targets = targets.to(self.device, non_blocking=True)
 
-            with autocast(dtype=torch.float16, enabled=self.tcfg.fp16):
+            with autocast('cuda', dtype=torch.float16, enabled=self.tcfg.fp16):
                 _, loss = self.model(tokens, targets)
                 loss = loss / self.tcfg.grad_accum_steps
 
@@ -90,7 +90,7 @@ class Trainer:
                 break
             tokens = tokens.to(self.device, non_blocking=True)
             targets = targets.to(self.device, non_blocking=True)
-            with autocast(dtype=torch.float16, enabled=self.tcfg.fp16):
+            with autocast('cuda', dtype=torch.float16, enabled=self.tcfg.fp16):
                 _, loss = self.model(tokens, targets)
             n_tok = targets.numel()
             total_loss += loss.item() * n_tok
@@ -106,7 +106,46 @@ class Trainer:
         avg_loss = loss_tensor.item()
         return avg_loss, math.exp(min(20.0, avg_loss))
 
-    def fit(self, total_steps: int, ckpt_callback=None):
+    @torch.no_grad()
+    def sample_generation(self, prompt_ids: torch.Tensor, max_new_tokens: int = 50,
+                          temperature: float = 0.8, top_k: int = 40):
+        """Genera tokens desde un prompt. Devuelve dict con tokens generados y métricas.
+        Solo se ejecuta en rank 0; otros ranks devuelven None.
+        """
+        if not self.is_main:
+            return None
+
+        was_training = self.model.training
+        self.model.eval()
+        unwrapped = self._unwrap()
+
+        if prompt_ids.dim() == 1:
+            prompt_ids = prompt_ids.unsqueeze(0)
+        prompt_ids = prompt_ids.to(self.device)
+        prompt_len = prompt_ids.size(1)
+
+        t_start = time.time()
+        with autocast('cuda', dtype=torch.float16, enabled=self.tcfg.fp16):
+            generated = unwrapped.generate(
+                prompt_ids,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_k=top_k,
+            )
+        elapsed = time.time() - t_start
+
+        if was_training:
+            self.model.train()
+
+        new_tokens = generated[0, prompt_len:].tolist()
+        return {
+            'generated_ids': new_tokens,
+            'elapsed_s': elapsed,
+            'tokens_per_sec': len(new_tokens) / max(1e-6, elapsed),
+            'n_generated': len(new_tokens),
+        }
+
+    def fit(self, total_steps: int, ckpt_callback=None, sample_callback=None):
         self.model.train()
         loader_iter = iter(self.train_loader)
 
@@ -172,6 +211,14 @@ class Trainer:
                     and self.global_step > 0
                     and self.global_step % self.tcfg.checkpoint_interval == 0):
                 ckpt_callback(self.global_step)
+
+            if (sample_callback is not None and self.is_main
+                    and self.global_step > 0
+                    and self.global_step % self.tcfg.sample_interval == 0):
+                try:
+                    sample_callback(self.global_step)
+                except Exception as e:
+                    self.logger.warning(f"step={self.global_step} sample_callback_error={e}")
 
             self.global_step += 1
 

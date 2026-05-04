@@ -72,7 +72,7 @@ class Transformer(nn.Module):
     def generate(self, tokens: torch.Tensor, max_new_tokens: int,
                  temperature: float = 1.0, top_k: int = None, top_p: float = None,
                  eos_token_id: int = None):
-        self.eval()
+        # Nota: el caller debe asegurar self.eval() antes y restaurar el modo previo.
         for _ in range(max_new_tokens):
             ctx = tokens[:, -self.config.max_seq_len:]
             logits, _ = self.forward(ctx)

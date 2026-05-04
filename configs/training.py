@@ -14,6 +14,16 @@ class TrainConfig:
     log_interval: int = 10
     checkpoint_interval: int = 1000
 
+    # Sample generation periódico durante entrenamiento
+    sample_interval: int = 100
+    sample_max_new_tokens: int = 50
+    sample_temperature: float = 0.8
+    sample_top_k: int = 40
+
+    # Rotación de checkpoints: mantiene los últimos N + uno cada M pasos como hito
+    ckpt_keep_last: int = 5
+    ckpt_milestone_every: int = 500
+
     muon_lr: float = 0.02
     adamw_lr: float = 3e-3
     muon_momentum: float = 0.95
